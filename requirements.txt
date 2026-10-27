@@ -1,0 +1,4 @@
+beautifulsoup4==4.15.0
+openai==3.40.0
+python-dotenv==1.2.4
+requests==2.34.2
