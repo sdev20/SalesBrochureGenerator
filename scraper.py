@@ -1,5 +1,9 @@
+
 from bs4 import BeautifulSoup
 import requests
+from tokens import truncate_to_tokens
+from config import MAX_PAGE_TOKENS
+
 
 
 def fetch_website_links(url):
@@ -8,6 +12,9 @@ def fetch_website_links(url):
 
     Args:
         url (str): The URL of the website to scrape.
+
+    Returns:
+        list: A list of all the links found on the website.
     """
 
     try:
@@ -27,6 +34,9 @@ def fetch_website_content(url):
 
     Args:
         url (str): The URL of the website to scrape.
+
+    Returns:
+        str: The content of the website, truncated to MAX_PAGE_TOKENS tokens.
     """
 
     try:
@@ -40,7 +50,8 @@ def fetch_website_content(url):
             text = soup.body.get_text(separator="\n", strip=True)
         else:
             text = ""
-        return (title + "\n\n" + text)[:2_000]
+
+        return truncate_to_tokens(title + "\n\n" + text, MAX_PAGE_TOKENS)
     except requests.exceptions.RequestException as e:
         print(f"Error fetching {url}: {e}")
         return ""

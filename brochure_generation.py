@@ -2,6 +2,7 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 import json
+from config import MAX_LINKS_PER_PAGE, API_MODEL
 from prompts import get_brochure_system_prompt, get_brochure_user_prompt, get_relevant_links_system_prompt, get_relevant_links_user_prompt
 from scraper import fetch_website_content, fetch_website_links
 
@@ -15,7 +16,8 @@ else:
     print("OPENAI_API_KEY environment variable is set.")
 
 openAI = OpenAI()
-model = os.getenv("API_Model")
+model = API_MODEL
+
 
 def fetch_relevant_links(links, website_url):
     """
@@ -48,20 +50,15 @@ def fetch_content_and_relevant_links(website_url):
     """
 
     # fetch the list of links from the website
-    links = fetch_website_links(website_url) 
-
-    # fetch the content of the website
-    content = fetch_website_content(website_url)
-
+    website_links = fetch_website_links(website_url) 
     # fetch the relevant links for brochure generation
-    relevant_links = fetch_relevant_links(links, website_url)
+    relevant_links = fetch_relevant_links(website_links, website_url)
 
-    # format the content and relevant links for brochure generation
-    result = f"## Landing Page:\n\n{content}\n## Relevant Links:\n"
-    for link in relevant_links['links']:
-        result += f"\n\n### Link: {link['type']}\n"
-        result += fetch_website_content(link["url"])
-    return result
+    pages = [{"type": "landing", "content": fetch_website_content(website_url), "url": website_url}]
+
+    for link in relevant_links['links'][:MAX_LINKS_PER_PAGE]:
+       pages.append({"type": link['type'], "content": fetch_website_content(link["url"]), "url": link["url"]})
+    return pages
 
 
 def create_brochure(website_url):
@@ -71,17 +68,22 @@ def create_brochure(website_url):
     Args:
         website_url (str): The URL of the website to scrape.
     """
-    company_content = fetch_content_and_relevant_links(website_url)
+    pages = fetch_content_and_relevant_links(website_url)
+    company_content = format_pages_for_brochure(pages)
+
+    system_prompt = get_brochure_system_prompt() 
+    user_prompt = get_brochure_user_prompt(company_content)
+
     brochure_response = openAI.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": get_brochure_system_prompt()},
-                {"role": "user", "content": get_brochure_user_prompt(company_content)}
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ],
         )
 
     result = brochure_response.choices[0].message.content
-    print(result)
+    return result
 
 
 def stream_brochure(website_url):
@@ -91,7 +93,8 @@ def stream_brochure(website_url):
     Args:
         website_url (str): The URL of the website to scrape.
     """
-    company_content = fetch_content_and_relevant_links(website_url)
+    pages = fetch_content_and_relevant_links(website_url)
+    company_content = format_pages_for_brochure(pages)
     brochure_response = openAI.chat.completions.create(
                 model=model,
                 messages=[
@@ -104,8 +107,17 @@ def stream_brochure(website_url):
     result = ""
     for chunk in brochure_response:
         if chunk.choices[0].delta.content is not None:
-            result += chunk.choices[0].delta.content
-            print(result)
+            delta = chunk.choices[0].delta.content
+            result += delta
+            print(delta, end="", flush=True)
 
+    return result
+
+def format_pages_for_brochure(pages):
+    formatted_content = f"## Landing Page:\n\n{pages[0]['content']}\n## Relevant Links:\n"
+    for page in pages[1:]:
+        formatted_content += f"\n\n### Link: {page['type']}\n"
+        formatted_content += page['content']
+    return formatted_content
 
 

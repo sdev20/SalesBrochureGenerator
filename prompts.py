@@ -34,6 +34,5 @@ You are looking at a company.
 Here are the contents of its landing page and other relevant pages;
 use this information to build a short brochure of the company in markdown without code blocks.\n\n
 """
-    user_prompt += content
-    user_prompt = user_prompt[:5_000] # Truncate if more than 5,000 characters
+    user_prompt += f"{content}"
     return user_prompt
