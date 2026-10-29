@@ -4,11 +4,11 @@ You are a helpful assistant that extracts relevant links from a list of links fo
 Please provide only the relevant links in a JSON format as this example. See if you can make relative URLs to absolute URLs based on the website URL.
 {
     "links": [
-        {"type": "product", "url": "https://www.cellares.com/product1"},
-        {"type": "about", "url": "https://www.cellares.com/about"},
-        {"type": "contact", "url": "https://www.cellares.com/contact"},
-        {"type": "technology", "url": "https://www.cellares.com/technology"},
-        {"type": "careers", "url": "https://www.cellares.com/careers"},
+        {"type": "product", "url": "https://www.example.com/product1"},
+        {"type": "about", "url": "https://www.example.com/about"},
+        {"type": "contact", "url": "https://www.example.com/contact"},
+        {"type": "technology", "url": "https://www.example.com/technology"},
+        {"type": "careers", "url": "https://www.example.com/careers"},
     ]
 }
 """
