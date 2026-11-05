@@ -2,12 +2,54 @@
 
 Generate a short Markdown company brochure for prospective customers, investors, and recruits using content from the company's public website.
 
+## Design focus: token budgets and cost control
+
+The brochure itself is simple to produce. Most of the engineering effort here goes into deciding **how much website text the model should read**, because that drives cost, latency, and quality. The recurring questions are:
+
+- How many tokens does each page cost, and what is the total per request?
+- What do we keep when a site is bigger than the budget?
+- How do we choose what to keep so the useful facts survive?
+
+Decisions below are made from measurements on real sites (google.com, cellares.com, huggingface.com), not guesses. In LLM-engineering terms, the limits are *resource guardrails* (cost and size caps). There are no safety or quality guardrails yet (see Limitations).
+
 ## How it works
 
-1. `scraper.py` fetches the landing page and collects every link on it.
-2. An OpenAI model picks the links that matter for a brochure (about, products, careers, and so on) and returns them as JSON.
-3. Each selected page is fetched, cleaned to visible text, and cut to a per-page token limit.
-4. The pages are joined into one prompt, and the model writes the brochure.
+### Flow that runs today
+
+```
+URL
+ → fetch landing page + collect its links             (scraper.py)
+ → LLM picks the relevant links, returns JSON         (brochure_generation.py)
+ → fetch each selected page, keep first MAX_PAGE_TOKENS tokens   (scraper.py, tokens.py)
+ → join pages into one prompt                          (brochure_generation.py)
+ → LLM writes the brochure                             (brochure_generation.py)
+```
+
+This is the **baseline**: simple and predictable, but it always keeps the *start* of each page, whether or not that part is useful.
+
+### Flow being built (RAG experiment)
+
+```
+URL
+ → fetch landing page + selected links, pages kept (nearly) uncut
+ → split every page into overlapping token chunks      (rag.py, done)
+ → embed every chunk and a fixed brochure query        (planned)
+ → rank chunks by cosine similarity to the query       (planned)
+ → fill MAX_CONTENT_TOKENS with the best chunks,       (planned)
+   restore page and reading order
+ → format into the prompt → LLM writes the brochure
+```
+
+Progress:
+
+| Step | What | Status |
+|---|---|---|
+| R1 | Chunk page text in tokens, with overlap, keeping page type, URL and position | Done (`rag.py`) |
+| R2 | Embed chunks and the query | Next |
+| R3 | Cosine similarity ranking | Planned |
+| R4 | Fill the token budget with top chunks, restore order | Planned |
+| R5 | Compare against the baseline on the same cached pages | Planned |
+| R6 | Tune chunk size, overlap, query wording, diversity, near-duplicates | Planned |
 
 ## Project layout
 
@@ -16,7 +58,8 @@ Generate a short Markdown company brochure for prospective customers, investors,
 | `main.py` | Command-line entry point |
 | `brochure_generation.py` | Pipeline: link selection, page fetching, brochure generation (normal and streaming) |
 | `scraper.py` | Fetches links and page text with `requests` and BeautifulSoup |
-| `tokens.py` | Token counting and truncation with `tiktoken` |
+| `tokens.py` | Token counting, truncation, and encode/decode helpers (`tiktoken`) |
+| `rag.py` | Token-based chunking (`chunk_text`, `chunk_pages`); embeddings and ranking will go here |
 | `prompts.py` | System and user prompts |
 | `config.py` | Model name and size limits |
 
@@ -42,6 +85,12 @@ Create a `.env` file in the project directory with your API key:
 OPENAI_API_KEY=your-openai-api-key
 ```
 
+To try the RAG path (see below), add this optional line to `.env`:
+
+```dotenv
+RAG_ENABLED=true
+```
+
 The model name and size limits are set in `config.py`, not in `.env`.
 
 ## Generate a brochure
@@ -50,32 +99,82 @@ The model name and size limits are set in `config.py`, not in `.env`.
 python main.py https://example.com
 ```
 
-The brochure is printed to the terminal in Markdown; it is not saved to a file. To stream output as it is generated, add --stream argument in command
+Add `--stream` to print the brochure as it is generated. Without it, the full brochure is printed at the end. The brochure is not saved to a file.
 
 ## Configuration (`config.py`)
 
 | Setting | Value | Meaning |
 |---|---|---|
-| `API_MODEL` | `gpt-4o-mini` | Model used for link selection and brochure generation |
+| `API_MODEL` | `gpt-4o-mini` | Model used for link selection and brochure generation; also selects the `tiktoken` encoding |
 | `MAX_LINKS_PER_PAGE` | 10 | Maximum linked pages fetched in addition to the landing page |
-| `MAX_PAGE_TOKENS` | 2,500 | Tokens kept per page |
-| `MAX_CONTENT_TOKENS` | 25,000 | Planned limit for all scraped content in one request (not enforced yet) |
+| `MAX_PAGE_TOKENS` | 2,500 | Tokens kept per page in the baseline |
+| `MAX_CONTENT_TOKENS` | 25,000 | Limit for all scraped content in one request (to be enforced by the RAG budget step) |
+| `CHUNK_TOKENS_SIZE` | 350 | Tokens per chunk |
+| `CHUNK_OVERLAP_TOKENS_SIZE` | 50 | Tokens shared between neighbouring chunks |
+| `RAG_ENABLED` | `false` | Read from `.env`. When true, pages are fetched without the per-page cap and chunked; when false, the baseline runs |
 
 ## Design decisions
 
-**Why limit scraped content at all?** The model's context window is large (200k tokens for the model I checked), so the limits are not about fitting. They keep cost and latency down, stop noisy text from diluting the useful facts, and protect against unusually large pages or link lists.
+### Limits and tokens
 
-**Why a token limit and not a character limit?** Tokens per character vary a lot between pages. On huggingface.com, the pricing and enterprise pages hit the old 8,000-character cap but cost 7,240 and 6,362 tokens, while ordinary pages cost about 1,500. Those two pages alone were about 57% of the input. A token cap controls what the model actually reads and what is billed.
+**Why limit scraped content at all?** The context window is large (200k tokens for the model I checked), so the limits are not about fitting. They keep cost and latency down, stop noisy text from diluting the useful facts, and protect against unusually large pages or link lists.
 
-**Why `tiktoken`?** It counts tokens the way OpenAI models do, so limits can be set in the unit that matters.
+**Why a token limit and not a character limit?** Tokens per character vary a lot. On huggingface.com the pricing and enterprise pages hit the old 8,000-character cap but cost 7,240 and 6,362 tokens (about 1.1 characters per token), while ordinary pages cost about 1,500 tokens (about 4 characters per token). A character cap cannot predict cost, so a token cap, measured with `tiktoken`, matches what the model reads and what is billed.
 
-**Why 2,500 tokens per page?** Most pages measured between 250 and 2,000 tokens, so 2,500 leaves them whole and only trims outliers. It also roughly matches the average share of the content budget: 25,000 tokens across 11 pages is about 2,270.
+**Why 2,500 tokens per page (baseline)?** Most pages measured 250 to 2,000 tokens, so 2,500 leaves them whole and only trims outliers. It is also close to an even share of the budget: 25,000 tokens across 11 pages is about 2,270.
 
+**Why 25,000 tokens in total?** Measured inputs ranged from about 5k to 22k tokens. 25k covers that range with some room. It is a cost and quality guard, not a context-window limit. Output is not a concern: briefs were 484 to 685 tokens whatever the input size.
 
-## Current limitations
+**Why was the old 5,000-character prompt cut removed?** It came from a tutorial example. It cut the combined text, so it silently dropped the linked pages, which are the content the link-selection step exists to collect. Prompt-building code now only builds the prompt; limits are applied to the scraped content before it.
 
-- The scraper reads HTML and does not run JavaScript, so script-rendered sites return little text (google.com's landing page is about 33 tokens). With thin input, the model may fill gaps from what it already knows, so check the brochure against the source.
-- The total content limit (`MAX_CONTENT_TOKENS`) is not enforced yet. Eleven pages at 2,500 tokens can reach 27,500.
-- The link-selection step can return near-duplicate pages (for example several news articles).
+### Why RAG
+
+The baseline's per-page cut keeps the first 2,500 tokens of every page, so what survives depends on position, not relevance. Uncut, the real page sizes turned out to be larger than the old caps showed:
+
+- Hugging Face pricing is about 15k tokens and enterprise about 12k, versus 7,240 and 6,362 when capped.
+- Those two pages are 93 of 130 chunks (about 70%). All pages together come to about 43.7k chunk tokens, against a 25k budget.
+
+So about 40% of the content has to go, and the question is which 40%. Ranking chunks by similarity to a brochure-focused query chooses by relevance instead of by position or page length, and it can pick useful passages from anywhere in a long page. This is also how unpredictable page types are ranked: the link-selection model invents the type names, so ranking by type would not work across sites.
+
+The baseline is kept so the two approaches can be compared on the same pages.
+
+### Chunking
+
+**Why chunk in tokens and not characters?** For the same reason as the page limits: a chunk of 1,200 characters can be 300 or 1,000 tokens. Token-sized chunks are evenly sized, fit the embedding model's input limit, and make the budget arithmetic exact. Token boundaries decide the cut; each slice is decoded back to text, because embeddings and prompts take text.
+
+**Why chunk at all?** Embedding a whole page gives one vector that blends every topic on it, so ranking could only choose whole pages. Chunks let retrieval pick the right passages.
+
+**Why 350 tokens with 50 overlap?** Starting values: large enough to hold a complete idea, small enough to stay on one topic. Overlap keeps a sentence that falls on a boundary whole in a neighbouring chunk. It costs about 14% more tokens to embed (130 chunks hold 43.7k tokens, but about 37.7k are unique). If two adjacent chunks are both selected, the overlapping text appears twice in the prompt, which the budget step has to handle. Both numbers are to be tuned in R6.
+
+**Why does every chunk carry `url`, `type`, `content`, and `index`?** After ranking, chunks from different pages are mixed. The page type is needed for prompt headings, `index` restores reading order within a page, and the source page is needed to judge which pages the winning chunks came from. `index` restarts at 0 for each page.
+
+**Why no vector database?** A page set is 100 to 250 chunks and is rebuilt for each run, so a Python list and `numpy` are enough, and they keep the mechanics visible.
+
+**Why must pages reach `rag.py` (nearly) uncut?** If the scraper has already cut a page to 2,500 tokens, retrieval can never choose the later parts. The baseline cap therefore must not apply to the RAG path; only a large safety cap should, so one huge page cannot flood the pipeline.
+
+## Measurements
+
+Baseline input and output (before per-page token caps):
+
+| Site | Input tokens | Output tokens |
+|---|---|---|
+| google.com | 4,706 | 558 |
+| cellares.com | about 15,100 | 685 |
+| huggingface.com | 22,028 | 484 |
+
+Chunking huggingface.com with the uncut scraper: 11 pages, 130 chunks, 43,664 chunk tokens. Pricing (51 chunks) and enterprise (42 chunks) dominate.
+
+## Work in progress and known issues in the code
+
+- With `RAG_ENABLED=true`, pages are fetched **without** any cap and chunked, but the chunks are not used yet: all page text is still sent to the model. Nothing is ranked or limited until R2 to R4 are connected, so a run with the flag on can exceed `MAX_CONTENT_TOKENS`. With the flag off (the default), the capped baseline runs for both normal and streaming modes.
+- There is no RAG safety cap in `config.py` yet.
+- The link-selection step is not deterministic, so two runs on the same site can fetch different pages. Cache fetched pages (for example to a JSON file) when comparing baseline and RAG.
+- The last chunk of a page can be tiny, with only a token or two of new text.
+
+## Limitations
+
+- The scraper reads HTML and does not run JavaScript, so script-rendered sites return little text (google.com's landing page is about 33 tokens; a Workable careers page gave one chunk). With thin input the model may fill gaps from what it already knows, so check the brochure against the source.
+- Only links on the landing page are followed, links are not normalised or deduplicated, and the model sometimes selects near-duplicates (for example several news articles on cellares.com).
 - Navigation, footer, and similar boilerplate text is not removed from pages.
 - Website requests can fail because of network errors or site restrictions, and there is no request timeout yet.
+- Guardrails: only resource limits (token caps) exist. There is no protection against prompt injection from scraped text, no check that the brochure sticks to the source, no validation of the link JSON, and no block on private or local URLs.

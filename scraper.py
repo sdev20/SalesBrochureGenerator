@@ -1,8 +1,8 @@
 
 from bs4 import BeautifulSoup
 import requests
-from tokens import truncate_to_tokens
-from config import MAX_PAGE_TOKENS
+from tokens import get_truncated_text
+from config import MAX_PAGE_TOKENS, RAG_ENABLED
 
 
 
@@ -51,7 +51,9 @@ def fetch_website_content(url):
         else:
             text = ""
 
-        return truncate_to_tokens(title + "\n\n" + text, MAX_PAGE_TOKENS)
+        if RAG_ENABLED:
+            return title + "\n\n" + text 
+        return get_truncated_text(title + "\n\n" + text, MAX_PAGE_TOKENS)
     except requests.exceptions.RequestException as e:
         print(f"Error fetching {url}: {e}")
         return ""

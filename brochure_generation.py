@@ -1,21 +1,12 @@
-import os
-from dotenv import load_dotenv
-from openai import OpenAI
 import json
-from config import MAX_LINKS_PER_PAGE, API_MODEL
+from config import CHUNK_OVERLAP_TOKENS_SIZE, MAX_LINKS_PER_PAGE, API_MODEL, CHUNK_TOKENS_SIZE, RAG_ENABLED
 from prompts import get_brochure_system_prompt, get_brochure_user_prompt, get_relevant_links_system_prompt, get_relevant_links_user_prompt
+from llm_client import client
+from rag import chunk_pages, embed_texts
 from scraper import fetch_website_content, fetch_website_links
 
 
 
-load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise ValueError("OPENAI_API_KEY environment variable is not set.")
-else:
-    print("OPENAI_API_KEY environment variable is set.")
-
-openAI = OpenAI()
 model = API_MODEL
 
 
@@ -28,7 +19,7 @@ def fetch_relevant_links(links, website_url):
         website_url (str): The URL of the website to scrape.
     """
 
-    response = OpenAI().chat.completions.create(
+    response = client.chat.completions.create(
         model=model,
         messages=[
             {"role": "system", "content": get_relevant_links_system_prompt()},
@@ -45,8 +36,10 @@ def fetch_content_and_relevant_links(website_url):
     Fetches the content of the given website URL and relevant links for brochure generation.
 
     Args:
-        links (list): The list of links to process.
         website_url (str): The URL of the website to scrape.
+
+    Returns:
+        list: A list of pages with their content and URLs.
     """
 
     # fetch the list of links from the website
@@ -69,21 +62,28 @@ def create_brochure(website_url):
         website_url (str): The URL of the website to scrape.
     """
     pages = fetch_content_and_relevant_links(website_url)
-    company_content = format_pages_for_brochure(pages)
+    if RAG_ENABLED:
+        print("RAG Enabled")
+        chunks = chunk_pages(pages, CHUNK_TOKENS_SIZE, CHUNK_OVERLAP_TOKENS_SIZE)
+        chunks_embeddings = embed_texts([c['content'] for c in chunks])
+        print(chunks_embeddings)
+        print(chunks_embeddings.shape)
+    # company_content = format_pages_for_brochure(pages)
 
-    system_prompt = get_brochure_system_prompt() 
-    user_prompt = get_brochure_user_prompt(company_content)
+    # system_prompt = get_brochure_system_prompt() 
+    # user_prompt = get_brochure_user_prompt(company_content)
 
-    brochure_response = openAI.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-        )
+    # brochure_response = client.chat.completions.create(
+    #         model=model,
+    #         messages=[
+    #             {"role": "system", "content": system_prompt},
+    #             {"role": "user", "content": user_prompt}
+    #         ],
+    #     )
 
-    result = brochure_response.choices[0].message.content
-    return result
+    # result = brochure_response.choices[0].message.content
+    # return result
+    return ""
 
 
 def stream_brochure(website_url):
@@ -95,7 +95,7 @@ def stream_brochure(website_url):
     """
     pages = fetch_content_and_relevant_links(website_url)
     company_content = format_pages_for_brochure(pages)
-    brochure_response = openAI.chat.completions.create(
+    brochure_response = client.chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": get_brochure_system_prompt()},

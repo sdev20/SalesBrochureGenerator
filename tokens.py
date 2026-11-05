@@ -9,10 +9,16 @@ except KeyError:
     print(f"Encoding for model {model} not found. Initializing with default encoding.")  
     encoding = tiktoken.get_encoding("o200k_base")
 
-def get_token_count(text):
-    return len(encoding.encode(text))
+def get_tokens_count(text):
+    return len(text_to_tokens(text))
 
-def truncate_to_tokens(text, max_tokens):
+def get_truncated_text(text, max_tokens):
     tokens = encoding.encode(text)
     tokens = tokens[:max_tokens]
+    return encoding.decode(tokens)
+
+def text_to_tokens(text):
+    return encoding.encode(text)
+
+def tokens_to_text(tokens):
     return encoding.decode(tokens)
